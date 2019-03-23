@@ -41,7 +41,9 @@ def generate_data():
         d = ''.join(random.choices(string.ascii_uppercase + string.digits, k=LENGTH_DATA))
         time.sleep(0.5)
         q_data.put(d)
+    q_data.put(None)
     time.sleep(5)
+    
 def generate_ACKs():
     for i in range(10):
         time.sleep(1.67)
