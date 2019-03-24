@@ -4,6 +4,7 @@ import time
 import random 
 import queue
 from pprint import pprint
+import os
 
 WINDOW_SIZE = 9
 MOD_SN_MAX  = WINDOW_SIZE + 1 
@@ -52,6 +53,7 @@ def retransmit_packets():
         if nextseqnum == seqnum:
             break
         unacked_packets[seqnum].tmstp = t_now
+        packets_in_the_channel.put(unacked_packets[seqnum])
         print("{}, ".format(seqnum), end=" ")
     print("")
 
@@ -62,7 +64,7 @@ def set_timer_event():
 def print_to_file(filename, data):
     with open(filename,"a") as f:
         print(data, file=f)
-        
+
 def window_controller():
     while True:
         data = q_data.get()
@@ -74,9 +76,8 @@ def window_controller():
             updated_window.wait()
         updated_window.clear()
         print_to_file("sdr_data.txt", data)
-        packet = Packet(data, nextseqnum, 0, time.time())
-        unacked_packets[nextseqnum] = packet
-        packets_in_the_channel.put(packet)
+        unacked_packets[nextseqnum] = Packet(data, nextseqnum, 0, time.time())
+        packets_in_the_channel.put(unacked_packets[nextseqnum])
         print("Packet sent: base = {} , seqnum = {}".format(base, nextseqnum))
         # print("Packet sent: base = {} , seqnum = {}".format(base, nextseqnum), end=" ")
         # print("Packet sent: data={}, base = {} , seqnum = {}".format(d, base, nextseqnum), end=" ")
@@ -129,11 +130,14 @@ def ACKs_controller():
     while True:
             ACK = q_ACKs.get()
             time.sleep(random.gauss(RTT_MU, RTT_SIGMA))
+            if random.uniform(0, 1) > 0.75:
+                print("--> Ack delayed!")
+                time.sleep(3*RTT_MU)
             # if random.uniform(0, 1) < 0.95:
             base_temp = ACK.sn
             print("ACK = {}".format(base_temp))
             global base
-            if base_temp in [expected_base % MOD_SN_MAX for expected_base in range(base+1, nextseqnum+WINDOW_SIZE+1)]:
+            if base_temp in [expected_base % MOD_SN_MAX for expected_base in range(base+1, base+WINDOW_SIZE+1)]:
                 for ind in [ind % MOD_SN_MAX for ind in range(base, base+WINDOW_SIZE)]:
                     if ind == base_temp:
                         break
@@ -159,7 +163,7 @@ def generate_data():
         time.sleep(DELTA_T_DATA)
         q_data.put(d)
     q_data.put(None)
-    time.sleep(3)
+    time.sleep(20)
     for t in range(3,0,-1):
         print("Shutting down in ...{}s".format(t))
         time.sleep(1)
@@ -192,6 +196,9 @@ def receiver_controller():
                 print("Packet received!! ---> seqnum = {}".format(extpectedseqnum))
                 extpectedseqnum = (extpectedseqnum + 1) % MOD_SN_MAX
         q_ACKs.put(Packet(None, extpectedseqnum, None, time.time()))
+
+os.remove("sdr_data.txt")
+os.remove("rvr_data.txt")
 
 generate_data_t = threading.Thread(target=generate_data)
 window_controller_t = threading.Thread(target=window_controller)
