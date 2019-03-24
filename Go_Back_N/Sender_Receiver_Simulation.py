@@ -150,6 +150,8 @@ def ACKs_controller():
                     print("---> Stopping signalling")
                     stop_timer.set()
                 update_timer_status.set()
+                if not generate_data_t.is_alive() and all(packet is None for packet in unacked_packets):
+                    break
 
 
 def generate_ACKs():
@@ -163,11 +165,11 @@ def generate_data():
         time.sleep(DELTA_T_DATA)
         q_data.put(d)
     q_data.put(None)
-    time.sleep(20)
-    for t in range(3,0,-1):
-        print("Shutting down in ...{}s".format(t))
-        time.sleep(1)
-    print("Finished Simulation")
+    # time.sleep(20)
+    # for t in range(3,0,-1):
+        # print("Shutting down in ...{}s".format(t))
+        # time.sleep(1)
+    # print("Finished Simulation")
 
 def print_status():
     old = "0 0"
@@ -208,12 +210,13 @@ ACKs_controller_t   = threading.Thread(target=ACKs_controller)
 receiver_controller_t = threading.Thread(target=receiver_controller)
 # generate_ACKs_t = threading.Thread(target=generate_ACKs)
 
-queues_status_t = threading.Thread(target=print_status)
+# queues_status_t = threading.Thread(target=print_status)
 
-queues_status_t.daemon      = True
+generate_data_t.daemon      = True
+# queues_status_t.daemon      = True
 window_controller_t.daemon  = True
 timer_controller_t.daemon   = True
-ACKs_controller_t.daemon    = True
+# ACKs_controller_t.daemon    = True
 receiver_controller_t.daemon = True
 
 generate_data_t.start()
@@ -224,9 +227,15 @@ ACKs_controller_t.start()
 receiver_controller_t.start()
 # generate_ACKs_t.start()
 
-queues_status_t.start()
+# queues_status_t.start()
 
-generate_data_t.join()
+# generate_data_t.join()
 
+ACKs_controller_t.join()
 # receiver_controller_t.join()
 # generate_ACKs_t.join()
+
+for t in range(3,0,-1):
+        print("Shutting down in ...{}s".format(t))
+        time.sleep(1)
+print("Finished Simulation")
