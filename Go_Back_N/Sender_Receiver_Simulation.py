@@ -5,23 +5,23 @@ import random
 import queue
 from pprint import pprint
 
-MAX_DATA_INTERVAL   = 2
-SN_INIT             = 0
-WINDOW_SIZE         = 9
-MOD_SN_MAX          = WINDOW_SIZE + 1 
-RTT_0 = 10
-LENGTH_DATA = 10
+WINDOW_SIZE = 9
+MOD_SN_MAX  = WINDOW_SIZE + 1 
 
-base = SN_INIT
-nextseqnum = SN_INIT
-packets_in_the_channel = [None for _ in range(MOD_SN_MAX)]
-q_data = queue.Queue()
-q_ACKs = queue.LifoQueue()
+SN_INIT         = 0
+base            = SN_INIT
+nextseqnum      = SN_INIT
+extpectedseqnum = SN_INIT
 
-start_timer         = threading.Event()
-update_timer_status = threading.Event()
-stop_timer          = threading.Event()
-updated_window      = threading.Event()
+unacked_packets         = [None for _ in range(MOD_SN_MAX)]
+packets_in_the_channel  = queue.Queue()
+q_data                  = queue.Queue()
+q_ACKs                  = queue.Queue()
+q_received_data         = queue.Queue()
+
+RTT_MU      = 300/1000
+RTT_SIGMA   = 30/1000
+RTT_0       = 3*RTT_MU
 
 DELTA_T_ACKS    = 1.7
 DELTA_T_DATA    = 0.5
@@ -30,17 +30,19 @@ DELTA_T_PRINT   = 0.5
 Q_ACKs_SIM  = 5
 Q_DATA_SIM  = 2*WINDOW_SIZE
 
+LENGTH_DATA = 10
+
+start_timer         = threading.Event()
+update_timer_status = threading.Event()
+stop_timer          = threading.Event()
+updated_window      = threading.Event()
+
 class Packet():
-    def __init__(self, data, sn, chk):
-        self.data = data
-        self.sn   = sn
-        self.chk  = chk    
-
-def make_seg(d, sn, chk):
-    return Packet(d, sn, chk)    
-
-def read_ACK(ack):
-    return ack.sn
+    def __init__(self, data, sn, chk, tmstp):
+        self.data   = data
+        self.sn     = sn
+        self.chk    = chk    
+        self.tmstp  = tmstp 
 
 def retransmit_packets():
     t_now = time.time()
@@ -49,7 +51,7 @@ def retransmit_packets():
         seqnum = seqnum % MOD_SN_MAX
         if nextseqnum == seqnum:
             break
-        packets_in_the_channel[seqnum][1] = t_now
+        unacked_packets[seqnum].tmstp = t_now
         print("{}, ".format(seqnum), end=" ")
     print("")
 
@@ -57,22 +59,29 @@ def set_timer_event():
     start_timer.set()
     update_timer_status.set()
 
+def print_to_file(filename, data):
+    with open(filename,"a") as f:
+        print(data, file=f)
+        
 def window_controller():
     while True:
-        d = q_data.get()
-        if d is None:
+        data = q_data.get()
+        if data is None:
             break
         global nextseqnum
         while not ((nextseqnum < base+WINDOW_SIZE) and (nextseqnum != (base+WINDOW_SIZE) % MOD_SN_MAX)):
             print("waiting")
             updated_window.wait()
-        updated_window.clear()    
-        packets_in_the_channel[nextseqnum] = [make_seg(d, nextseqnum, 0), time.time()]
+        updated_window.clear()
+        print_to_file("sdr_data.txt", data)
+        packet = Packet(data, nextseqnum, 0, time.time())
+        unacked_packets[nextseqnum] = packet
+        packets_in_the_channel.put(packet)
         print("Packet sent: base = {} , seqnum = {}".format(base, nextseqnum))
         # print("Packet sent: base = {} , seqnum = {}".format(base, nextseqnum), end=" ")
         # print("Packet sent: data={}, base = {} , seqnum = {}".format(d, base, nextseqnum), end=" ")
-        # pprint(packets_in_the_channel)
-        # for ind,packet in enumerate(packets_in_the_channel):
+        # pprint(unacked_packets)
+        # for ind,packet in enumerate(unacked_packets):
             # if packet!=None:
                 # print(ind, packet[0], packet[1])
                 # print(ind, packet.sn, packet.data)
@@ -110,25 +119,26 @@ def timer_controller():
                 break
             timer.cancel()
             global base
-            t_base = packets_in_the_channel[base][1]
+            t_base = unacked_packets[base].tmstp
             delta_RTT0 = RTT_0 + t_base - time.time()
-            print("Timer readjusted! ---> delta_RTT0 = {}".format(delta_RTT0))
+            print("Timer readjusted! ---> delta_RTT0 = {0:.4f}".format(delta_RTT0))
             timer = threading.Timer(delta_RTT0, set_timer_event)
             timer.start()
             
 def ACKs_controller():
     while True:
             ACK = q_ACKs.get()
+            time.sleep(random.gauss(RTT_MU, RTT_SIGMA))
             # if random.uniform(0, 1) < 0.95:
-            base_temp = read_ACK(ACK)
+            base_temp = ACK.sn
             print("ACK = {}".format(base_temp))
             global base
             if base_temp in [expected_base % MOD_SN_MAX for expected_base in range(base+1, nextseqnum+WINDOW_SIZE+1)]:
                 for ind in [ind % MOD_SN_MAX for ind in range(base, base+WINDOW_SIZE)]:
                     if ind == base_temp:
                         break
-                    packets_in_the_channel[ind] = None 
-                # pprint(packets_in_the_channel)
+                    unacked_packets[ind] = None 
+                # pprint(unacked_packets)
                 base = base_temp      
                 print("Base updated! {}".format(base))
                 updated_window.set()
@@ -141,7 +151,7 @@ def ACKs_controller():
 def generate_ACKs():
     for i in range(Q_ACKs_SIM):
         time.sleep(DELTA_T_ACKS)
-        q_ACKs.put(Packet(None, i+1, None))
+        q_ACKs.put(Packet(None, i+1, None, time.time()))
 
 def generate_data():
     for i in range(Q_DATA_SIM):
@@ -149,7 +159,11 @@ def generate_data():
         time.sleep(DELTA_T_DATA)
         q_data.put(d)
     q_data.put(None)
-    time.sleep(10)
+    time.sleep(3)
+    for t in range(3,0,-1):
+        print("Shutting down in ...{}s".format(t))
+        time.sleep(1)
+    print("Finished Simulation")
 
 def print_status():
     old = "0 0"
@@ -159,26 +173,53 @@ def print_status():
             print(to_print)
         time.sleep(DELTA_T_PRINT)
 
+def is_corrupt(packet):
+    return False
+    # if random.uniform(0, 1) < 0.95:    
+        # return False
+    # return True
+
+def receiver_controller():
+    while True:
+        packet = packets_in_the_channel.get()
+        time.sleep(random.gauss(RTT_MU, RTT_SIGMA))
+        if not is_corrupt(packet):
+            global extpectedseqnum
+            if extpectedseqnum == packet.sn:
+                data = packet.data
+                q_received_data.put(data)
+                print_to_file("rvr_data.txt", data)
+                print("Packet received!! ---> seqnum = {}".format(extpectedseqnum))
+                extpectedseqnum = (extpectedseqnum + 1) % MOD_SN_MAX
+        q_ACKs.put(Packet(None, extpectedseqnum, None, time.time()))
+
+generate_data_t = threading.Thread(target=generate_data)
 window_controller_t = threading.Thread(target=window_controller)
 timer_controller_t  = threading.Thread(target=timer_controller)
 ACKs_controller_t   = threading.Thread(target=ACKs_controller)
 
-generate_data_t = threading.Thread(target=generate_data)
-generate_ACKs_t = threading.Thread(target=generate_ACKs)
+receiver_controller_t = threading.Thread(target=receiver_controller)
+# generate_ACKs_t = threading.Thread(target=generate_ACKs)
+
 queues_status_t = threading.Thread(target=print_status)
 
 queues_status_t.daemon      = True
 window_controller_t.daemon  = True
 timer_controller_t.daemon   = True
 ACKs_controller_t.daemon    = True
+receiver_controller_t.daemon = True
 
 generate_data_t.start()
-generate_ACKs_t.start()
-queues_status_t.start()
 window_controller_t.start()
 timer_controller_t.start()
 ACKs_controller_t.start()
 
+receiver_controller_t.start()
+# generate_ACKs_t.start()
+
+queues_status_t.start()
 
 generate_data_t.join()
-generate_ACKs_t.join()
+
+# receiver_controller_t.join()
+# generate_ACKs_t.join()
